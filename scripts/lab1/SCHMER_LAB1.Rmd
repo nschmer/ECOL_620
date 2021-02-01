@@ -1,0 +1,246 @@
+---
+title: "ECOL 620 Lab 1"
+author: "Natalie Schmer"
+date: "1/21/2021"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+# Load in packages 
+```{r, message=F, warning=F}
+{
+  library(tidyverse)
+  library(rgdal)
+  library(viridis)
+  library(tidylog)
+  library(ggthemes)
+  library(ggrepel)
+  library(here)
+  library(sp)
+  library(cowplot)
+}
+
+#need to download old usmap 
+install.packages("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/usmap_0.5.1.tar", repos = NULL, type="source")
+```
+
+# 1. Briefly describe (1-2 sentences) what each of the following functions achieve.
+
+- `c()` is for concatenate, and combines the arguments into a list or vector.
+- `geom_smooth()` is in {ggplot2} and draws a line through data to help show the pattern of the data, helps a lot when there is a lot on the plot. Need to specify the formula and fit arguments.
+- `rep()` replicates values as specified in the arguments.
+- `filter()` in {dplyr} subsets dataframe rows using values in columns that satisfy the given arguments.
+- `%>%()` is a pipe! From {magrittr}, moves whatever object is on the left to the operation on the right.
+- `png()` writes an object (like a plot) to a .png file. Need to specify file path as an argument and can also set height, width, other aesthetics.
+- `coord_map()` is for map projection in {ggplot2}.
+- `plot_grid()` from {cowplot} allows for arranging multiple plots in a grid. Can specify number of rows, columns, adjust alignments, labels with a variety of arguments.
+
+# US Maps
+## 2. Ploting the contiguous U.S. states colored by area 
+```{r, message = F, warning = F}
+# Load the data we used earlier, join states to df with areas
+states <- as.data.frame(state.x77)
+states$region <- tolower(rownames(states))
+states_map <- map_data("state")
+fact_join <- left_join(states_map, states, by = "region")
+
+(state_areas <- ggplot(fact_join, aes(long, lat, group = group))+
+  geom_polygon(aes(fill = Area), colour = "white")+
+  scale_fill_viridis_c(option = "D")+
+  ggthemes::theme_clean() +
+  coord_map("bonne", lat0 = 40)+
+  labs(y = "Latitude", 
+       x = "Longitude", 
+       fill = "Area (sq. miles)",
+       title = "Area of US States")+
+  theme(legend.position = "bottom",
+        legend.text = element_text(angle = 90, vjust = 0.5))
+)
+```
+
+## 3 Three additional plots of the same data, each with different color scale and geographic projection, put together with `plot_grid` function to make a three-panel horizontal plot.
+```{r, message = F, echo = T, fig.show="hide"}
+
+#1 
+(state_areas_1 <- ggplot(fact_join, aes(long, lat, group = group))+
+  geom_polygon(aes(fill = Area), colour = "white")+
+  scale_fill_viridis_c(option = "A")+
+  ggthemes::theme_clean() +
+  coord_map("mercator")+
+  labs(y = "Latitude", 
+       x = "Longitude", 
+       fill = "Area (sq. miles)",
+       title = "Area of US States, \nMercator Projection")+
+  theme(legend.position = "bottom",
+        legend.text = element_text(angle = 90, vjust = 0.5))
+)
+
+#2
+(state_areas_2 <- ggplot(fact_join, aes(long, lat, group = group))+
+  geom_polygon(aes(fill = Area), colour = "white")+
+  scale_fill_viridis_c(option = "E")+
+  ggthemes::theme_clean() +
+  coord_map("stereographic")+
+  labs(y = "Latitude", 
+       x = "Longitude", 
+       fill = "Area (sq. miles)",
+       title = "Area of US States, \nStereographic Projection")+
+  theme(legend.position = "bottom",
+        legend.text = element_text(angle = 90, vjust = 0.5))
+)
+
+#3
+(state_areas_3 <- ggplot(fact_join, aes(long, lat, group = group))+
+  geom_polygon(aes(fill = Area), colour = "white")+
+  scale_fill_viridis_c(option = "C")+
+  ggthemes::theme_clean() +
+  coord_map("cylequalarea", lat0 = 40)+
+  labs(y = "Latitude", 
+       x = "Longitude", 
+       fill = "Area (sq. miles)",
+       title = "Area of US States,\nCylequalarea Projection")+
+  theme(legend.position = "bottom",
+        legend.text = element_text(angle = 90, vjust = 0.5))
+)
+```
+
+### 3-panel of the different color scales and projections
+```{r, fig.dim = c(12,6), message = F}
+plot_grid(state_areas_1, state_areas_2, state_areas_3, nrow = 1)
+```
+
+# US University Data
+## 4. Plot Colorado colleges and universities within the top 96th quantile of total student enrollment, add in `geom_text_repel(data=NAME_OF_YOUR_FILTERED_DATA, aes(label=NAME, x=LON, y = LAT), force=20, size=2)` 
+```{r, message = F, warning = F}
+# Read in the csv of university data  
+colo_unis <- read.csv(here::here("data/data_for_lab1/Colleges_and_Universities/colorado_universities.csv")) 
+
+# Filter to only CO 
+colo_unis <- colo_unis %>% 
+                filter(LSTATE == "CO")
+# check 
+unique(colo_unis$LSTATE)
+
+# Calculate and filter the 96th quantile universities
+(quan_96 <- quantile(colo_unis$TOT_ENROLL, .96, na.rm = T))
+
+co_96 <- colo_unis %>% 
+                filter(TOT_ENROLL >= quan_96)
+
+# Load in the CO shapefile 
+co_counties <- readOGR(here::here("data/data_for_lab1/counties/Colorado_County_Boundaries.shp"))
+
+# Set the min and max enroll
+min_enroll <- min(colo_unis$TOT_ENROLL)
+max_enroll <- max(colo_unis$TOT_ENROLL)
+
+# Plot 
+ggplot() +
+  geom_polygon(data = co_counties, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group), 
+               fill = NA, 
+               color ="black", 
+               lwd =.1) +
+  geom_point(data = co_96, 
+             aes(x = LON, 
+                 y = LAT, 
+                 size = TOT_ENROLL, 
+                 colour = TOT_ENROLL), 
+             alpha =.9) +
+  coord_map("bonne", lat0 = 40)+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank())+
+  theme(panel.border=element_blank())+
+  scale_color_viridis(limits = c(min_enroll, max_enroll),
+                      breaks = seq(5000, 30000, by=5000), 
+                      name = "Total\nenrollment")+
+  guides(color= guide_legend(), size=guide_legend())+
+  scale_size_continuous(limits = c(min_enroll,max_enroll), 
+                        breaks = seq(5000, 30000, by=5000),
+                        name = "Total\nenrollment") +
+    geom_text_repel(data = co_96, 
+                    aes(label = NAME, 
+                        x = LON, 
+                        y = LAT), 
+                    force = 20, size = 2)+
+  theme_clean()+
+  labs(y = "Latitude", 
+       x = "Longitude",
+       title = "CO Universities within the top\n96th quantile of student enrollment")
+```
+
+## 5. Other universities: On, Wisconsin!
+Wisconsin county boundary shapefile downloaded from https://data-wi-dnr.opendata.arcgis.com/datasets/county-boundaries-24k 
+```{r, warning=FALSE, message=F}
+# load in shapefiles for WI counties and universities
+wi_counties <- readOGR(here::here("data/County_Boundaries_24K-shp/County_Boundaries_24K.shp"))
+
+us_uni <- readOGR(here::here("data/data_for_lab1/Colleges_and_Universities/CollegesUniversities.shp"))
+
+# Filter out WI schools
+wi_uni <- subset(us_uni, LSTATE=="WI")
+
+# check crs 
+proj4string(wi_counties)
+proj4string(wi_uni)
+
+# reproject counties with the uni projection 
+wi_counties_reprj <- spTransform(wi_counties, "+proj=longlat +datum=WGS84 +no_defs")
+
+# make wi unis a df 
+wi_unis_df <- as.data.frame(wi_uni)
+
+#remove ins_size =<0 as those are not reported or not applicable
+wi_unis_df <- wi_unis_df %>% 
+              dplyr::filter(INST_SIZE > 0) 
+```
+
+### WI Plot
+```{r, warning=FALSE, message=F}
+ggplot() +
+  geom_polygon(data = wi_counties_reprj, 
+               aes(x = long, 
+                   y = lat, 
+                   group = group),
+               fill = NA, color ="black", lwd=.1) +
+  geom_point(data = wi_unis_df %>% filter(NAME != "University of Wisconsin-Madison"), 
+               aes(x = LON, 
+                   y = LAT, 
+                   size=INST_SIZE, 
+                   colour=INST_SIZE), 
+              alpha=.7) + 
+    geom_point(data = wi_unis_df %>% filter(NAME == "University of Wisconsin-Madison"), 
+               aes(x = LON, 
+                   y = LAT, 
+                   size=INST_SIZE), 
+               alpha=.6, color = "blue", show.legend = F) +
+  coord_map("bonne", lat0 = 40)+
+  theme_clean()+
+  theme(panel.grid.minor=element_blank(),
+        panel.grid.major=element_blank())+
+  theme(panel.border=element_blank())+
+  scale_color_viridis(limits = c(1, 5),
+                      labels = c("Under 1000",
+                                 "1000 - 4999",
+                                 "5000 - 9999",
+                                 "10000 - 19999",
+                                 "20000 and above"),
+                      name = "Institution\nsize") +
+  guides(color= guide_legend(), size=guide_legend()) +
+  scale_size_continuous(limits=c(1, 5),
+                        breaks=seq(1, 5, by= 1),
+                        labels = c("Under 1000",
+                                 "1000 - 4999",
+                                 "5000 - 9999",
+                                 "10000 - 19999",
+                                 "20000 and above"),
+                        name = "Institution\nsize")+
+  labs(y = "Latitude", 
+       x = "Longitude",
+       title = "University of Wisconsin-Madison")
+
+```
+
