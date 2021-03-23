@@ -1,0 +1,119 @@
+---
+title: "ECOL 620 Lab 7"
+author: "Natalie Schmer"
+date: "3/18/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(raster)          
+library(reshape2)         #for re-formatting data; version 1.4.3 used
+library(rgdal)            #for reading different types of GIS files; version 1.3-4 used
+library(adehabitatLT)     #for trajectory information; version 0.3.23 used
+library(adehabitatHR)     #Home range estimation; version 0.4.15 used
+library(adehabitatHS)     #for selection ratios; version 0.3.13 used
+library(survival)         #for conditional logit model; version 2.42-3 used
+library(tidyverse)
+
+```
+
+
+# Some ggplot code to plot all of this: 
+```{r}
+mcp95_df <- fortify(mcp95, region='id')
+
+#Selecting the cat
+mcp95_df_137=subset(mcp95_df, id==137)
+
+# SOme of the plotting 
+ggplot() +
+  geom_polygon(data=mcp95_df_137,aes(x=long, y=lat),colour="black", fill="yellow")
+
+# for all cats, use group=id to delineate polygons 
+```
+
+
+# 1. 
+# 2.
+
+#3. MCP for panther 137: 
+```{r}
+
+mcp95 <- mcp(panthers[,"CatID"], percent = 95)
+mcp50 <- mcp(panthers[,"CatID"], percent = 50)
+mcp75 <- mcp(panthers[,"CatID"], percent = 75)
+
+mcp95_df <- fortify(mcp95, region='id')
+mcp75_df <- fortify(mcp75, region='id')
+mcp50_df <- fortify(mcp50, region='id')
+
+
+#Selecting the cat
+mcp95_df_137=subset(mcp95_df, id==137)
+mcp75_df_137=subset(mcp75_df, id==137)
+mcp50_df_137=subset(mcp50_df, id==137)
+
+panther137_points <- as.data.frame(panthers) %>% 
+                        filter(CatID == "137")
+
+# SOme of the plotting 
+ggplot() +
+  geom_polygon(data=mcp95_df_137,aes(x=long, y=lat),colour="black", fill="yellow")+
+    geom_polygon(data=mcp75_df_137,aes(x=long, y=lat),colour="black", fill="green")+
+  geom_polygon(data=mcp50_df_137,aes(x=long, y=lat),colour="black", fill="blue")+
+  geom_point(panther137_points, mapping = aes(x = coords.x1, y= coords.x2))+
+  ggthemes::theme_few()
+```
+
+# 4. 
+```{r}
+  ggplot() +
+    geom_polygon(data=mcp95_df,aes(x=long, y=lat, group = id), colour="black", fill = NA)+
+    geom_polygon(data=mcp50_df,aes(x=long, y=lat, group = id), colour="black")+
+  geom_point(panther137_points, mapping = aes(x = coords.x1, y= coords.x2))+
+  ggthemes::theme_few()
+```
+
+later (q5?): look at phone photo for loping through and only take 95  
+```{r}
+## 14 points seems to be a good choice (rough asymptote for all animals)
+## the k-LoCoH method:
+nn <- LoCoH.k(panthers[,1], k=14)
+
+## Graphical display of the results
+plot(nn, border=NA)
+
+length(nn)
+names(nn)
+
+lch_panther_all=data.frame()
+for(i in 1:length(nn)){
+  iso=as.data.frame(nn[[i]])
+  iso=subset(iso, percent<100)
+  iso=which.min(abs(iso$percent-95))
+  
+  lch=(nn[[i]][iso,])
+  lch=fortify(lch)
+  lch$id=names(nn)[i]
+  lch_panther_all=rbind(lch, lch_panther_all)
+}
+
+ch_panther_all_holes=subset(lch_panther_all, hole==T)
+lch_panther_all=subset(lch_panther_all, hole==F)
+
+geom_polygon(data=lch_panther_all,aes(x=long, y=lat, group=group, fill=id), alpha=.8)+
+geom_polygon(data=lch_panther_all_holes,aes(x=long, y=lat, group=group), fill="white", alpha=1)
+
+
+
+
+
+```
+
+
+
+
+
+
