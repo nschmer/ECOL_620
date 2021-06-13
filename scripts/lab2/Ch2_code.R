@@ -105,7 +105,7 @@ remove(toy,toy2, e, toy_big, toy_crop, toy_dis2, toy_dis2_bilinear, toy_maj, toy
 #nlcd
 #------------------#
 
-nlcd<-raster("nlcd2011SE")
+nlcd <- raster( "/Users/natalieschmer/Downloads/Lab2/data_for_lab2/nlcd2011SE")
 
 #inspect
 proj4string(nlcd)   #from sp
@@ -303,5 +303,46 @@ pres.1km.ci <- confint(pres.1km)
 pres.2km.ci <- confint(pres.2km)
 pres.1km.ci
 pres.2km.ci
+
+# Code graveyard from the assignment 
+
+# Pres is the response variable we try to predict using the different buffer distances 
+formulas <- c("pres ~ m_500", "pres ~ f1km", "pres ~ f1.5km", "pres ~ f2km", "pres ~ f2.5km", "pres ~ f3km", "pres ~ f3.5km", "pres ~ f4km", "pres ~ f4.5km", "pres ~ f5km")
+
+tbl <- tibble(forms = formulas)
+
+tbl_2 <- tbl %>% 
+  mutate(all = map(formulas, pres_f))
+
+#Calc logliks and confident intervals  and extract into column 
+tbl_2$logliks <- lapply(tbl_2[[2]], logLik)
+
+tbl_2$confint_t <- lapply(tbl_2[[2]], confint) 
+
+# format df better 
+
+tbl_2_df <- tbl_2 %>% 
+  dplyr::select(-all) %>% 
+  as.data.frame()
+
+tbl_2_df <-  tbl_2_df %>% 
+  mutate(scale = str_split_fixed(forms, "~ ", n = 3)[, 2]) %>% 
+  mutate(scale = parse_number(scale)) %>% 
+  mutate(scale  = case_when(scale %in% seq(1, 5, by =.5)~ scale *1000,
+                            scale == 500.0 ~ 500.0
+  ))
+```
+
+# I can access CIs through 
+pres.1km.ci[2,]
+
+betas <- tbl_2_df %>% 
+  select(scale, confint)
+
+
+
+
+
+
 
 

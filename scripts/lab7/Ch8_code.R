@@ -179,10 +179,10 @@ plot(LoCoH.k.range)
 
 #inspect
 a.search[5]
-k.search[11] # k = 14 for all cats to converge 
+k.search[14] # k = 14 for all cats to converge 
 
 #re-fit model
-LoCoH.k.61 <- LoCoH.k(SpatialPoints(coordinates(panther147)), k=k.search[11])
+LoCoH.k.61 <- LoCoH.k(SpatialPoints(coordinates(panther147)), k=k.search[14])
 
 #plot
 plot(LoCoH.k.61) #stack of all the polygons formed in that process 

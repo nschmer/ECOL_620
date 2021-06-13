@@ -2,25 +2,22 @@
 title: "ECOL 620 Lab 2"
 author: "Natalie Schmer"
 date: "1/28/2021"
-output: html_document
-editor_options: 
+output:
+  word_document: default
+editor_options:
   chunk_output_type: console
 ---
 
-```{r}
-save.image(file = "/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2.RData")
-
-load("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2.RData")
-```
-
 # Load packages 
-```{r}
+```{r, message = F}
 {
   library(raster)      #for raster data; version 2.6-7 used
   library(rgdal)       #for raster data, projections; version 1.3-4 used
   library(rgeos)       #for buffer analysis; version 0.3-28 used
   library(here)
   library(tidyverse)
+  library(tidylog)
+  library(xtable)
   }
 ```
 
@@ -28,15 +25,15 @@ load("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2.RData")
 - `crop()` from {raster} uses an extent of one object to geographically subset another object.
 - `extent()` from {raster} gives the extent of a spatial object with xmin/ xmax and ymin/ ymax.
 - `disaggregate()` from {raster} creates a raster with a higher resolution due to smaller cells, retains the values as the original raster unless using the bilinear method. 
-- `aggregate()` from {raster} creates a raster with a lower resolution due to larger cells.  
-- `cellStats()`
-- `mask()`
-- `res()`
-- `gBuffer()`
-- `rpois()`
+- `aggregate()` from {raster} creates a raster with a lower resolution due to larger cells.
+- `cellStats()` from {raster} allows for calculating statistics for cells in a raster object. Returns new raster with a new value for each cell,can apply sum, mean, min, max, sd, skew, and rms.
+- `mask()` from {raster} takes two objects, one a raster and the other a spatial object like a polygon, and uses the other spatial object to set all values NA that in the raster that are not within the other object. Can also set to inverse.
+- `res()` from {raster} gets or sets the resolution of a raster object.
+- `gBuffer()` from {rgeos} applies a buffer around a given point of a sp object.
+- `rpois()` from {stats} creates a poisson distribution. Need to set parameters of n for number of values to return or insert defined object, and mean/ variance of those values, lambda. 
 
 # 2. Creating a 20 x 20 raster with poisson distribution, lambda = 5. 
-```{r}
+```{r, warning=F, message=FALSE}
 # Create raster
 q2rast <- raster(ncol = 20, nrow = 20, xmn = 0, xmx = 20, ymn = 0, ymx = 20)
 
@@ -54,36 +51,405 @@ res(q2rast)
 ```
 
 # 3. Aggregate the CO elevation 
-```{r}
+```{r, eval = F, include = T}
 # Load elevation raster 
 co_elev <- raster(here("data/data_for_lab2/elevation/srtm_15_05.tif"))
 
 # For loop to aggregate raster, calc variance, get resolution, and make into a df to plot from 
-new_data <- data.frame()
+
+#Make dataframe to store loop components
+new_data <- data.frame() %>% 
+            mutate(aggregate_factor = NA,
+                   var = NA,
+                   res = NA)
+
+#Create the sequence and define steps and where to put data 
 for (i in as.numeric(seq(5, 255, by = 25))) {
   print(i)
-  new_raster <- raster::aggregate(co_elev, fact = i, fun = mean)
+  new_raster <- raster::aggregate(co_elev, fact = i, fun = "mean")
   variance <- cellStats(new_raster, var)
   res_new_raster <- res(new_raster)[1]
-  z <- c(aggregate_factor = i, var = variance, res =  res_new_raster)
+  
+  z$aggregate_factor <- i
+  z$var <- variance
+  z$res <- res_new_raster
+  
   new_data <- rbind(z, new_data)
 }
 
-# For some reason the column names did not carry over to the new data frame 
-# Look at the components we assigned in the loop 
+# Check that the column names and values match the components we assigned in the loop 
 z
 new_data
 
-# The cols and values in z match the 255 factor row of new_data so just rename 
-names(new_data)
-new_data <- new_data %>% 
-                      rename(aggregate_factor = "X5", 
-                             var = "X303795.930365646", 
-                             res = "X0.00416666666666667")
+
+# write as rds to call in when I knit 
+saveRDS(new_data, file = "/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q3_newdata.rds")
 
 ```
 
+## Plot 
+As shown in the plot below, the spatial variance decreases as the grain increases. This is due to the fact that increasing the grain size is leads to coarser resolution and less detail so less variance between grains. 
+
+```{r}
+new_data <- read_rds("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q3_newdata.rds")
+
+ggplot(new_data, aes(aggregate_factor, var))+
+  geom_point()+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_classic()+
+  labs(y = "Log(spatial variance)", 
+       x = "Log(grain)")
+```
+
+# 4. Plot of the elevation raster aggregated by a factor of 55 using ggplot, with state overlay 
+```{r}
+# Create the raster 
+co_elev <- raster(here("data/data_for_lab2/elevation/srtm_15_05.tif"))
+raster_55 <- raster::aggregate(co_elev, fact = 55, fun = "mean")
+
+#ggplot doesn’t handle rasters that well so convert to a dataframe
+SRTM_df <- rasterToPoints(raster_55) 
+SRTM_df <- data.frame(SRTM_df) 
+colnames(SRTM_df) <- c("X","Y","DEM") 
+head(SRTM_df)
+
+# load the state data from lab 1 for overlay 
+states_map <- map_data("state")
 
 
+#extent of raster
+(raster::extent(raster_55))
+```
+
+## Plot
+```{r, message = F, warning = F}
+ggplot()+
+  geom_tile(SRTM_df, mapping = aes(x = X, y = Y, fill = DEM)) + 
+  scale_fill_gradientn(colours = terrain.colors(10)) +
+  geom_polygon(data = states_map, aes(x=long, y = lat, group = group), fill = NA, color ="black", lwd=.3) +
+  coord_cartesian(xlim = c(-110, -104.9583),
+                  ylim = c(34.95833, 40))+
+    theme_classic()+
+labs(y = "Latitude", 
+     x = "Longitude",
+     fill = "DEM (elevation)")
+```
+
+# 5. Crop nlcd using a 10 km barrier from min and max coordinates of reptile sampling 
+```{r, warning=F, message=F}
+#load site and reptile data
+nlcd <- raster(here("data/data_for_lab2/nlcd2011SE"))
+
+#inspect
+proj4string(nlcd)   #from sp
+projection(nlcd)    #alternative function from raster package
+crs(nlcd)           #alternative function from raster package (replaces 'projection')
+
+#set projection: just need to define it 
+nlcd_proj <- projection(nlcd)
+
+#inspect raster properties: resolution, number of cells, extent 
+res(nlcd)
+ncell(nlcd)
+extent(nlcd)
+
+# Reptile sites 
+sites <- readOGR(here("data/data_for_lab2/reptiledata/reptiledata.shp"))
+
+#inspect
+class(sites)
+proj4string(sites)
 
 
+#set projection of the sites to be the same as raster
+proj4string(sites) <- nlcd_proj 
+proj4string(sites)
+summary(sites)
+head(sites, 2)
+
+
+sites <- subset(sites, management!="Corn")
+
+# Calculate the 10 km buffer and create the new extent  
+x.min <- min(sites$coords_x1) - 10000
+x.max <- max(sites$coords_x1) + 10000
+y.min <- min(sites$coords_x2) - 10000
+y.max <- max(sites$coords_x2) + 10000
+
+extent.new <- extent(x.min, x.max, y.min, y.max)
+nlcd_cropped <- crop(nlcd, extent.new) 
+
+#compare the cell counts 
+(nlcd_celln <- ncell(nlcd))
+
+(nlcd_crop_celln <- ncell(nlcd_cropped))
+
+(celldif <- nlcd_celln - nlcd_crop_celln)
+
+cell_pct_diff <- (celldif/nlcd_celln)*100
+
+(cell_pct_diff <- round(cell_pct_diff, digits = 2))
+```
+
+After cropping, `r toString(nlcd_crop_celln)` cells remain. This means `r toString(celldif)` cells were lost, a `r toString(cell_pct_diff)`% reduction from the original raster. 
+
+# 6. Using intervals of 500 m and a maximum range of 5000 m (minimum range of 500 m), where do you see the greatest correlation in each pairwise combination of scales? Is this surprising? Plot the scatter plot of the greatest pair-wise correlation combination. See Figure 2.9 for an example of many similar pairwise plots. 
+```{r, eval=F, include=T}
+nlcd <- raster( "/Users/natalieschmer/Downloads/Lab2/data_for_lab2/nlcd2011SE")
+
+#inspect
+projection(nlcd)    #alternative function from raster package
+
+#set projection: just need to define it 
+nlcd_proj <- projection(nlcd)
+
+#inspect raster properties: resolution, number of cells, extent 
+res(nlcd)
+ncell(nlcd)
+extent(nlcd)
+
+#check raster values
+# currently numeric, prints NULL, so convert to factors
+levels(nlcd) 
+nlcd <- as.factor(nlcd)
+#cover types
+levels(nlcd)  
+plot(nlcd) 
+
+#create a binary forest layer using nlcd as template
+#copy the raster 
+forest <- nlcd
+
+#sets all the values of forest to zero
+values(forest) <- 0 
+
+#prep for reclassification: use the "reclassify" function
+
+#check the levels 
+levels(forest)[[1]]
+
+#Assign the binary with 0s and 1s: first 7 values are 0, next 3 (forest types) are 1 because those are locations with evergreen + mixed forest + deciduous forest, last 6 are 0 
+reclass <- c(rep(0,7), rep(1,3), rep(0,6)) 
+nlcd.levels <- levels(nlcd)[[1]]
+
+#create reclassify matrix: first col: orginal; second: what to change to, cbinds by the ID
+reclass.mat <- cbind(levels(nlcd)[[1]], reclass) 
+reclass.mat
+
+#reclassify, formal class raster and the ID/binary 
+forest <- reclassify(nlcd, reclass.mat) 
+
+#plot to check 
+#plot(forest)
+#plot(sites, pch=21, col="white", add=T)
+
+#nice 
+```
+
+## Create scales, intervals of 500 m and a maximum range of 5000 m (minimum range of 500 m)
+
+```{r, eval=F, include=T}
+ grainarea <- res(forest)[[1]]^2/10000#in ha, resetting resolution
+# Create the buffer function to do the buffering 
+
+BufferCover <- function(coords, size, landcover, grain){
+ 
+  bufferarea.i <- pi*size^2/10000                             #size must be in m
+  coords.i <- SpatialPoints(cbind(coords[i, 1],coords[i, 2])) #create spatial points from coordinates
+  buffer.i <- gBuffer(coords.i, width=size)                   #buffer from rgeos
+  crop.i <- crop(landcover, buffer.i)                         #crop with raster function
+  crop.NA <- setValues(crop.i, NA)                            #empty raster for the rasterization
+  buffer.r <- rasterize(buffer.i, crop.NA)                    #rasterize buffer
+  land.buffer <- mask(x=crop.i, mask=buffer.r)                #mask by putting NA outside the boundary
+  coveramount<-cellStats(land.buffer, 'sum')*grain            #calculate area
+  percentcover<-100*(coveramount/bufferarea.i)                #convert to %
+
+  return(percentcover)
+}
+
+# which measurements are we interested in? Create a sequence 
+seq(500, 5000, by = 500)
+
+#create empty vectors for storing output
+{
+  f05km <- rep(NA, length = nrow(sites))
+  f1km <- rep(NA, length = nrow(sites))
+  f1.5km <- rep(NA, length = nrow(sites))
+  f2km <- rep(NA, length = nrow(sites))
+  f2.5km <- rep(NA, length = nrow(sites))
+  f3km <- rep(NA, length = nrow(sites))
+  f3.5km <- rep(NA, length = nrow(sites))
+  f4km <- rep(NA, length = nrow(sites))
+  f4.5km <- rep(NA, length = nrow(sites))
+  f5km <- rep(NA, length = nrow(sites))
+}
+
+#with for loop 
+for(i in 1:nrow(sites)) {
+  f05km[i] <- BufferCover(coords=sites,size=500,landcover=forest,grain=grainarea)
+  
+  f1km[i] <- BufferCover(coords=sites,size=1000,landcover=forest,grain=grainarea)
+  
+  f1.5km[i] <- BufferCover(coords=sites,size=1500,landcover=forest,grain=grainarea)
+  
+  f2km[i] <- BufferCover(coords=sites,size=2000,landcover=forest,grain=grainarea)
+  
+  f2.5km[i] <- BufferCover(coords=sites,size=2500,landcover=forest,grain=grainarea)
+  
+  f3km[i] <- BufferCover(coords=sites,size=3000,landcover=forest,grain=grainarea)
+  
+  f3.5km[i] <- BufferCover(coords=sites,size=3500,landcover=forest,grain=grainarea)
+  
+  f4km[i] <- BufferCover(coords=sites,size=4000,landcover=forest,grain=grainarea)
+  
+  f4.5km[i] <- BufferCover(coords=sites,size=4500,landcover=forest,grain=grainarea)
+  
+  f5km[i] <- BufferCover(coords=sites,size=5000,landcover=forest,grain=grainarea)
+  
+  print(i)
+}
+
+#make a data frame
+forest.scale <- data.frame(site=sites$site,
+                         x=sites$coords_x1, y=sites$coords_x2,
+                         f05km = f05km, 
+                          f1km = f1km, 
+                          f1.5km = f1.5km,
+                          f2km = f2km, 
+                          f2.5km = f2.5km,
+                          f3km = f3km,
+                          f3.5km = f3.5km,
+                          f4km = f4km,
+                          f4.5km = f4.5km,
+                          f5km = f5km) %>% 
+  rename("500m" = f05km, 
+                         "1km" = f1km, 
+                         "1.5km" = f1.5km,
+                         "2km" = f2km, 
+                         "2.5km" = f2.5km,
+                         "3km" = f3km,
+                         "3.5km" = f3.5km,
+                         "4km" = f4km,
+                         "4.5km" = f4.5km,
+                         "5km" = f5km)
+
+# save rds to call in so knitting is easier  
+saveRDS(forest.scale, file = "/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q6forestscale.rds")
+```
+
+## Correlations
+```{r, message=F, warning=F}
+# Read in rds
+forest.scale <- read_rds("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q6forestscale.rds")
+
+#correlation matrix
+correlations <- cor(forest.scale[,4:13])
+```
+
+
+```{r, message = F, warning = F}
+# Find the highest correlation 
+#Make into a 3 column df that we can filter 
+corr_df <- as.data.frame(as.table(correlations))
+
+# Set the correlations that are 1 to NA bc those are when both distances are equal 
+(arranged <- corr_df %>% 
+          mutate(cor = ifelse(Var1 == Var2, NA, Freq)) %>% 
+          arrange(desc(Freq, na.rm =T)))
+
+```
+
+## Highest correlation pairwise plot
+ 
+After arranging, the pair of scales with the greatest correlation is 4.5 and 5 km with a correlation coefficient of 0.9975625. 
+I am not surprised that scales that are close are highly correlated, but I am surprised that the distances were 4 and 5 km, which seems far away from a given sampling point. On the other hand, these are large buffers so take into account a large area, including smaller buffer sizes which may also be correlated but weaker.  
+
+code solution for rearranging found at https://stackoverflow.com/questions/7074246/show-correlations-as-an-ordered-list-not-as-a-large-matrix
+
+### Plot 
+```{r}
+ggplot(forest.scale, aes(x = `4.5km`, y = `5km` ))+
+geom_point()+
+theme_classic()+
+labs(y = "Forest cover surrounding sample location at 5 km (%)", 
+     x = "Forest cover surrounding sample location at 4.5 km (%))")
+```
+
+# 7. Generate Figure 2.11 (only panels a and b) using ggplot, use 500m intervals and a maximum range of 5000 m (minimum range of 500 m). 
+
+I tried to do this with map and dplyr: 
+https://stackoverflow.com/questions/53968490/how-to-use-map-from-purrr-and-mutate-from-dplyr-to-produce-a-glm-summary-table but couldn't figure out the CI extractions so used the for loop (thanks Kyle!!!) 
+
+```{r, eval=F, include=T}
+#herp data
+flsk <- read.csv("data/data_for_lab2/reptiledata/reptiles_flsk.csv", header=T)
+
+flsk <- merge(flsk, forest.scale, by="site", all=F)
+
+# define the function 
+pres_f <- function(x) {glm(formula = as.formula(x), family = "binomial", data = flsk)}
+
+# Make a list of formulas as a column in a new dataframe
+names(flsk)
+
+flsk <- flsk %>% 
+            rename(m_500 = "500m")
+
+# For plots: For loop to run glms 
+#Beta plot: buffer size is x, y is 3 cols of "beta", "lower ci", "upper ci" 
+# From office hours help: a for loop to get the q7 df. 
+
+q7_df <- data.frame()
+
+for (i in 5:14) {
+  mod1 <- glm(pres ~ flsk[,i], family = "binomial", data = flsk)
+  scale <- names(flsk[i])
+  loglike <- logLik(mod1)[1]
+  beta <- mod1$coefficients[2]
+  lower_ci <- confint(mod1)[2,1]
+  uper_ci  <- confint(mod1)[2,2]
+  
+  rows <- cbind(scale, loglike, beta, lower_ci, uper_ci)
+  
+  q7_df <- rbind(q7_df, rows)
+  
+}
+
+#format dataframe 
+q7_df <-  q7_df %>% 
+              mutate(scales = parse_number(scale)) %>% 
+              mutate(scales  = case_when(scales %in% seq(1, 5, by =.5)~ scales *1000,
+                                        scales == 500.0 ~ 500.0
+                     )) %>% 
+  mutate(beta = as.numeric(beta),
+         upper_ci = as.numeric(uper_ci),
+         lower_ci = as.numeric(lower_ci))
+
+# Save q7 data as rds
+saveRDS(q7_df, file = "/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q7_data.rds")
+```
+
+
+## Plot 
+```{r, message = F, warning=F}
+q7_df <- read_rds("/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab2/q7_data.rds")
+
+# A
+ggplot(q7_df, aes(x = scales, y = as.numeric(loglike)))+
+  geom_point()+
+  geom_line()+
+  ggthemes::theme_clean()+
+  labs(y = "Log-liklihood",
+       x = "Forest cover scale (m)")
+
+# B
+ggplot()+
+geom_point(data = q7_df, aes(x = scales, y = beta), shape =1)+
+geom_errorbar(data = q7_df, aes(x = scales, ymin = lower_ci, ymax = upper_ci), colour="black", width=.1)+
+  theme_classic()+
+  labs(x = "Forest cover scale (m)",
+       y = expression(beta ~"(95% CI)"))
+```
+
+These plots suggest that the scale of drivers of occurrence for the skinks are best fitted where there is forest cover within 1.5 km buffers (shown by having the highst log-liklihood), with the worst fit below 1.5 km and decreasing after 1.5 km. This conclusion is different that Fletcher and Fortin since their strongest occurrence was 2 km, but not too different. I think that the sale of effect was captured by the scales sampled because there was a broad range of scales sampled which seems appropriate for the species we are looking at (they look small so going over 5 km away form a point doesn't seem necessary), in addition to including measurements at .5 km to ensure the jumps are not too broad. 

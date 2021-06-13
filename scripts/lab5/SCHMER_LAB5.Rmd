@@ -1,0 +1,644 @@
+---
+title: "ECOL 620 Lab 5"
+author: "Natalie Schmer"
+date: "2/18/2021"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, message = F}
+#load packages
+{
+  library(pgirmess)         
+  library(ncf)              
+  library(spdep)            
+  library(geoR)             
+  library(gstat)            
+  library(RandomFields)     
+  library(raster)           
+  library(waveslim)         
+  library(fields)           
+  library(reshape2)         
+  library(vegan)            
+  library(adespatial)
+  library(here)
+  library(tidyverse)
+  library(RColorBrewer)
+}
+```
+
+
+## 1. 
+The difference in use between Moran's I and Ripley's K/L functions is that even though both are measures of spatial correlation, Moran's I is more focused on the relationship of the physical locations and characteristics of what is being measured in the locations and the Ripley functions are more focused on the pattern of arrangement of whatever is being measured over different distances. 
+
+## 2. 
+In a correlogram, the scale is adjusted to -1:1 and is for understanding autocorrelations and determinig what data to actually use in further analysis. A semivariogram is on a different scale that directly compares variance to distance and scales are only limited by the range of values for distance and variance.  
+
+## 3. 
+-a: Y-intercept, above a starts the partial sill and below a is the nugget. 
+-b: Sill
+-c: Partial sill 
+-d: Range 
+
+# Cactus data
+## 4. pgirmiss, ncf, spdep corellograms 
+```{r, warning=F, message=FALSE, fig.show='hide'}
+#load data
+matrix <- read.csv('/Users/natalieschmer/Desktop/GitHub/ECOL_620/data/data_for_lab5/cactus_matrix.csv', header=T)
+
+#inspect
+head(matrix)
+
+#plot
+plot(matrix[,"y"] ~ matrix[,"x"],
+     pch=21, cex=1.2,
+     bg=gray.colors(12)[cut(matrix[,"Height"], breaks = 12)])
+
+#plot distribution of vegetation height, not normally dist 
+hist(matrix[,"Height"], xlab="Vegetation height (cm)",
+     main="histogram of vegetation height")
+
+#calculate distance matrix
+coords <- cbind(matrix$x, matrix$y)
+
+colnames(coords) <- c("x", "y")
+distmat <- as.matrix(dist(coords))
+
+#inspect
+dim(distmat)
+max(distmat)
+
+#Maximum distance to consider in correlogram/variogram (~1/2 to 2/3 total dist) don't go beyond 47-50 m
+maxdist <- 2/3*max(distmat)
+maxdist
+```
+
+### Calculations
+#### Correlogram with pgirmess
+```{r, warning=F, message=FALSE, fig.show='hide'}
+
+# using height, moran i, nbclasses is related to pairwise comparisons 
+correlog.pgirmess <- pgirmess::correlog(coords, matrix$Height, method="Moran",
+                            nbclass=14, alternative = "two.sided")
+
+#Moran and P values for each distance class, coef is moran i, pval- is moran i sig diff than 0, n is number pointwise comparisons in that distance band
+round(correlog.pgirmess,2)
+
+#plot: high correlation at 0.19, starts to break down and after 50 m p bad 
+plot(correlog.pgirmess[,1], correlog.pgirmess[,2],
+     xlab="Distance (m)", ylab="Moran's I", col = ifelse(correlog.pgirmess[,3] < 0.05,'red','black'), pch=19)
+abline(h=0)
+
+# make dataframe out of cols 1 and 2
+correlog.pgirmess.df <- as.data.frame(correlog.pgirmess) %>% 
+                        rename(Distance = dist.class,
+                               moran = coef) %>% 
+                      mutate(Method = "pgirmess")
+
+```
+
+#### Correlogram with ncf
+```{r, warning=F, message=FALSE, fig.show='hide'}
+#Correlogram with non-parameteric test of significance, spline and conf int
+correlog.ncf <- ncf::correlog(x = matrix$x, y = matrix$y, z = matrix$Height,
+                         increment=5, resamp=99)
+
+#plot
+plot(correlog.ncf)
+abline(h=0)
+
+# make df 
+correlog.ncf.df <- as.data.frame(correlog.ncf[c(2,3,5)])
+
+correlog.ncf.df <- correlog.ncf.df %>% 
+                      rename(Distance = mean.of.class,
+                             Moran = correlation,
+                             p.value = p) %>% 
+                      mutate(Method = "ncf")
+```
+
+#### Correlogram with spline and 95% pointwise bootstrap confidence intervals
+```{r, warning=F, message=FALSE, fig.show='hide'}
+spline.corr <- spline.correlog(x = matrix$x, y = matrix$y, z = matrix$Height,
+                               xmax = maxdist, resamp=99, type="boot")
+
+#plot
+plot(spline.corr)
+
+#--------------------------------------#
+#Moran's I test with spdep
+#--------------------------------------#
+# pull out the relevant stuff 
+#make a neighborhood list
+neigh <- dnearneigh(x=coords, d1=0, d2=3, longlat=F)#d1 is minimum distance, d2 is max distance
+
+#plot the neighorhood
+plot(neigh,coordinates(coords))
+
+#create weights for the neighbors
+wts <- nb2listw(neighbours=neigh, style='W', zero.policy=T)#W = row-standardized weights
+
+#Moran's I test with normal approximation versus Monte Carlo permutation test
+mor.mc <- moran.mc(x=matrix$Height, listw=wts, nsim=999, zero.policy=T) #Monte Carlo
+mor.norm <- moran.test(x=matrix$Height, listw=wts, randomisation=F, zero.policy=T)#normal approximation
+
+#inspect
+mor.mc
+mor.norm
+
+#--------------------------------------#
+#Correlograms with spdep
+#--------------------------------------#
+
+#repeat above with a for loop using consecutive lag distances
+
+#Create data frame for storing output
+correlog.sp <- data.frame(dist=seq(5, maxdist, by=5),
+                        Morans.i=NA, Null.lcl=NA, Null.ucl=NA, Pvalue=NA)
+#inspect
+head(correlog.sp)
+
+#then do a for loop to calculate Moran's I for lag distances
+for (i in 1:nrow(correlog.sp)){
+
+  d.start <- correlog.sp[i,"dist"]-5
+  d.end <- correlog.sp[i,"dist"]
+
+  neigh <- dnearneigh(x=coords, d1=d.start, d.end, longlat=F)
+  wts <- nb2listw(neighbours=neigh, style='W', zero.policy=T)
+  mor.i <- moran.mc(x=matrix$Height, listw=wts, nsim=99, alternative="greater", zero.policy=T)
+
+  #summarize results from spdep
+  correlog.sp[i, "dist"] <- (d.end+d.start)/2                                    #mean dist
+  correlog.sp[i, "Morans.i"] <- mor.i$statistic 								                 #observed Moran's I
+  correlog.sp[i, "Null.lcl"] <- quantile(mor.i$res, probs = 0.025,na.rm = TRUE)  #lower null envelope
+  correlog.sp[i, "Null.ucl"] <- quantile(mor.i$res, probs = 0.975,na.rm = TRUE)  #upper null envelope
+  correlog.sp[i, "Pvalue"] <- mor.i$p.value									                     #p-value for Moran's I at that distance category
+}
+
+#plot
+plot(y=correlog.sp$Morans.i, x=correlog.sp$dist,
+     xlab="Lag Distance(m)", ylab="Moran's I", ylim=c(-0.3,0.3))         #ylim provides limit on y-axis between -1 and 1
+abline(h=0)                                                              #0 reference
+lines(correlog.sp$dist, correlog.sp$Null.lcl,col = "red")	               #add the null lcl to the plot
+lines(correlog.sp$dist, correlog.sp$Null.ucl,col = "red")	               #add the null ucl to the plot
+
+# add identifier to correlog.sp
+correlog.sp.df <- correlog.sp %>% 
+                  mutate(Method = "spdep") %>% 
+                  rename(p.value = Pvalue,
+                         Distance = dist,
+                         Moran = Morans.i)
+
+```
+
+
+### Format each df to rbind to plot  
+```{r, warning=F, message=FALSE}
+# check names and fix and select cols 
+sort(names(correlog.pgirmess.df))
+sort(names(correlog.ncf.df))
+sort(names(correlog.sp.df))
+
+correlog.pgirmess.df <- correlog.pgirmess.df %>% 
+                          dplyr::select(Distance, Method, Moran = moran, p.value)
+
+correlog.ncf.df <- correlog.ncf.df %>% 
+                          dplyr::select(Distance, Method, Moran, p.value)
+
+correlog.sp.df <- correlog.sp.df %>% 
+                    dplyr::select(Distance, Method, Moran, p.value)
+
+# ribind to plot out of this df 
+all.corrs.df <- rbind(correlog.pgirmess.df, correlog.ncf.df, correlog.sp.df )
+```
+
+## Plot 
+```{r, warning=F, message=FALSE}
+all.corrs.df %>% 
+  dplyr::filter(Distance <= maxdist) %>% 
+  ggplot(., mapping = aes(Distance, Moran, shape = Method)) +
+    geom_line() +
+    geom_point(. %>% filter(p.value < 0.05), mapping =aes(),color = "red", size = 3) +
+    geom_point(. %>% filter(p.value > 0.05), mapping = aes(), color = "black", size = 3) +
+    geom_hline(yintercept = 0) +
+    theme_bw()+
+    labs(x = "Distance (m)",
+         y = "Moran's I")
+```
+
+Spatial autocorrelation happens for all methods up to D = ~15 m, and then after that is more sporadic and depends on the method with no similar distances having all methods showing autocorrelation. 
+
+# Cactus data: Semivariogram 
+## 5. gstat
+```{r, warning=F, message=FALSE}
+gstat.veg <- matrix
+coordinates(gstat.veg) = ~x + y
+
+#Empirical semivariogram
+emp.gstat <- variogram(Height ~ 1, cutoff=maxdist, width=3, gstat.veg)
+
+#plot variogram
+plot(emp.gstat)
+```
+
+Based on this plot, I would say that the nugget is from y = 0 to y = ~920, the sill is around y = 1260, and the range is a little less than 30 m, maybe around 28. 
+
+## 6. Anisotropy 
+```{r, warning=F, message=FALSE, fig.show='hide'}
+#create geoR object
+geoR.veg <- as.geodata(matrix)
+
+#plot
+plot(geoR.veg)
+
+#Empirical semivariogram
+emp <- variog(geoR.veg, max.dist=maxdist)
+
+#plot, y is semivariance, plateau 
+plot(emp)
+
+#standardize breaks
+emp <- variog(geoR.veg, max.dist=maxdist, breaks=c(seq(0,maxdist,by=3)))
+
+#plot variogram
+(plot(emp))
+```
+
+```{r, warning=F, message=FALSE}
+#Directional variogram in geoR
+emp4 <- variog4(geoR.veg, max.dist=maxdist)
+
+#plot directional variogram
+(plot(emp4))
+
+#Directional variogram in gstat
+emp4.gstat <- variogram(Height ~ 1, cutoff=maxdist, alpha=c(0,45,90,135), gstat.veg)
+
+#plot directional variogram
+(plot(emp4.gstat))
+```
+
+Based on these plots, I think there is some concern about anisotropy because the lines all seem to deviate from each other pretty quickly after about distance = 10 m and it is hard to discern a pattern that applies to all lines. 
+
+## 7. Variogram plot 
+```{r, warning=F, message=FALSE, fig.show='hide'}
+#Model-based variograms with likelihood fitting in geoR
+
+#Exponential variogram
+mlexp <- likfit(geoR.veg, cov.model="exp", ini=c(700,10))
+
+#Spherical variogram
+mlsph <- likfit(geoR.veg, cov.model="sph", ini=c(700,10))
+
+#inspect
+summary(mlexp)
+summary(mlsph)
+
+#model selection tool to look for models w lower aic values
+AIC(mlexp,mlsph)  
+
+#plot
+plot(emp)
+lines(mlexp, col="blue")
+lines(mlsph, col="red")
+
+#Monte Carlo envelopes
+emp.env <- variog.mc.env(geoR.veg, obj.var=emp)
+
+#plot
+plot(emp, envelope=emp.env)
+lines(mlsph, col="red")
+lines(mlexp, col="blue")
+
+
+#Model-based variograms with least squares in gstat
+
+#inspect models that gstat can fit
+vgm()#fits more models than geoR
+show.vgms()#plots examples of the various variograms
+
+#Spherical variogram
+sph.gstat <- fit.variogram(emp.gstat, vgm("Sph")) #in vgm(psill, model, range, nugget)
+
+#Exponential variogram
+exp.gstat <- fit.variogram(emp.gstat, vgm("Exp"))
+
+#inspect
+exp.gstat
+sph.gstat
+
+#plot
+plot(emp.gstat, exp.gstat)
+plot(emp.gstat, sph.gstat)
+```
+
+### Extract from sph.gstat and plot
+```{r, warning=F, message=FALSE}
+?variogramLine
+
+#preds[1,2]+sph.gstat$psill[2] 
+#Extract theoretical 
+sph.theo <- variogramLine(sph.gstat, maxdist = maxdist, min = 1.0e-6 * maxdist, 
+	dir = c(1,0,0), covariance = FALSE)
+
+#get value for where red line should be, distance where the plateau/ sill starts 
+mindist <- sph.theo %>% 
+  filter(gamma == max(gamma)) %>% 
+  filter(dist == min(dist)) %>% 
+  select(dist) %>% 
+  as.numeric()
+
+sph.gstat$range
+#red line/ max is 15.997
+
+sph.gstat$psill
+#blue line/ nugget is at 820.5813
+#green line/ sill is at 1287.013 aka max gamma 
+
+ggplot()+
+geom_point(data = emp.gstat, aes(x=dist, y=gamma, size = np))+
+  geom_hline(yintercept = 820.5813, color = "blue")+
+  geom_hline(yintercept = max(sph.theo$gamma), color = "green")+
+  geom_line(sph.theo, mapping = aes(dist, gamma))+
+  geom_vline(xintercept = 15.997, color = "red")+
+  labs(x= "Distance (m)",
+       y = "Semivariance")+
+  theme_bw()
+```
+
+## 8. Inverse distance and Kriging 
+```{r, warning=F, message=FALSE}
+#Create grid with intervals of 0.5 unit (.5-m)
+#need labels for coords
+new.grid.5m <- expand.grid(x=seq(0,max(matrix$x),.5), 
+                           y=seq(0,max(matrix$y),.5))
+
+#Maximum likelihood estimates from the variogram modeling
+mlexp$nugget # nugget
+mlexp$cov.pars[1] #partial sill
+mlexp$cov.pars[2] #range
+
+#Ordinary kriging w geoR
+krig.geoR.exp <- krige.conv(geoR.veg, locations=new.grid.5m, 
+                            krige=krige.control(cov.pars=c(mlexp$cov.pars[1], mlexp$cov.pars[2]), 
+                                                nugget = mlexp$nugget,
+                                              cov.model="exp", type.krige="OK"))
+
+#inspect
+hist(krig.geoR.exp$predict)
+hist(matrix$Height)
+
+#plot
+#see where points were collected 
+image(krig.geoR.exp, main="krigged estimates") 
+image(krig.geoR.exp, val=sqrt(krig.geoR.exp$krige.var), main="kriging SE")
+
+#kriging with gstat, need labels for coords
+new.grid.1m.gstat <- expand.grid(x=seq(0,max(matrix$x),.5), y=seq(0,max(matrix$y),.5))
+
+#convert to sp object
+gridded(new.grid.1m.gstat) = ~x + y
+
+# Ordinary kriging w gstat
+krig.gstat <- krige(Height ~ 1, 
+                    gstat.veg, 
+                    new.grid.1m.gstat, 
+                    model = sph.gstat)
+
+#Plot
+image(krig.gstat, main="krigged estimates-gstat")
+
+image(krig.geoR.exp, main="krigged estimates-geoR")
+
+cor(krig.geoR.exp$predict, krig.gstat$var1.pred)
+
+#Inverse distance weighting in gstat
+#idp-the power used; default power=2
+idw.gstat <- idw(Height ~ 1, gstat.veg, new.grid.1m.gstat)
+
+image(idw.gstat, main="idw estimates-gstat")
+```
+
+Based on the correlations and the plots, the ordinary kriging methods using exponential fit create the best interpolation. 
+
+```{r, warning=F, message=FALSE}
+#Correlation between idw, kriging in gstat, kriging in geoR
+round(cor(cbind(geoR.exp = krig.geoR.exp$predict, 
+                gstat.exp = krig.gstat$var1.pred,
+                gstat.idw = idw.gstat$var1.pred)),3)
+```
+
+
+# Elevation data
+## 9.  
+```{r, warning=F, message=FALSE, fig.show='hide'}
+#download elevation code
+#change the directory as needed
+srtm <- raster("~/Desktop/GitHub/ECOL_620/data/data_for_lab5/srtm_15_05.tif")
+e <- extent(-107.5, -107, 37.5, 38)
+srtm=crop(srtm, e)
+plot(srtm)
+
+#aggregate to reduce computation
+srtm = aggregate(srtm, fact=10, fun=mean) #mean value
+plot(srtm)
+
+#extract 500 points of elevation, randomly drawn
+set.seed(2020)
+
+#xy = T means keep x and y coords
+srtm_pts <- as.data.frame(sampleRandom(srtm, 500, xy=T)) 
+
+srtm_df <- rasterToPoints(srtm)
+srtm_df <- as.data.frame(srtm_df)
+
+colnames(srtm_pts)[3] <- "elevation"
+head(srtm_pts)
+plot(srtm)
+points(srtm_pts$x,srtm_pts$y)
+
+#Create grid with intervals of 0.008333333 degree, predict kriging back onto this new grid 
+
+extent(srtm)
+res(srtm)
+e <- extent(srtm)
+new.grid<- raster(e, resolution=res(srtm))
+new.grid <- as.data.frame(new.grid, xy=TRUE)
+new.grid <- new.grid[,1:2]
+
+plot(new.grid)
+
+# make the srtm_pts a matrix
+srtm_pts_mat <- as.matrix(srtm_pts)
+head(srtm_pts_mat)
+
+plot(srtm_pts_mat[,"y"] ~ srtm_pts_mat[,"x"],
+pch =21, bg = gray.colors(12)[cut(srtm_pts_mat[,3], breaks = 12)])
+
+# use 2/3 total distance 
+coords_9 <- cbind(srtm_pts$x, srtm_pts$y) 
+colnames(coords_9) <- c("x", "y")
+distmat_9 <- as.matrix(dist(coords_9))
+
+#maximum distance to consider in variogram
+maxdist_9 <- 2/3 * max(distmat)
+```
+
+### a: Variogram models 
+```{r, warning=F, message=FALSE}
+gstat.veg_9 <- srtm_pts
+
+coordinates(gstat.veg_9) <- ~x + y
+
+# change the width
+emp.gstat_9 <- variogram(elevation ~ 1, 
+                         cutoff = maxdist_9, 
+                         width = .05, 
+                         gstat.veg_9)
+
+plot(emp.gstat_9)
+
+show.vgms()
+```
+
+Visually, the models that seem like the best fit for our variogram are exp, sph, gau, and wav. However, I could not get gau or wav to actually work so I only tested exp and sph. 
+
+```{r}
+geor_9 <- as.geodata(gstat.veg_9)
+
+#Model-based variograms with likelihood fitting in geoR
+
+#Exponential variogram
+mlexp_9 <- likfit(geor_9, cov.model="exp", ini=c(700,10))
+
+#Spherical variogram
+mlsph_9 <- likfit(geor_9, cov.model="sph", ini=c(700,10))
+
+#inspect
+summary(mlexp_9)
+summary(mlsph_9)
+
+(AIC(mlexp_9, mlsph_9)) 
+
+```
+
+### b. Kriging with exp
+
+I chose exp because had the lower AIC value. 
+```{r, warning=F, message=FALSE}
+krig.geoR.exp_9 <- krige.conv(geor_9, locations = new.grid,
+krige = krige.control(cov.pars = c(mlexp_9$cov.pars[1], mlexp_9$cov.pars[2]), nugget = mlexp_9$nugget,
+cov.model = "exp", type.krige = "OK"))
+
+predicted_9 <- krig.geoR.exp_9$predict
+original <- srtm_df$srtm_15_05
+
+q9_elev_krig <- cbind(predicted_9, original)
+
+q9_elev_krig <- q9_elev_krig  %>% 
+              as.data.frame() %>% 
+              mutate(diff = round(predicted_9 - original, 2))
+
+# figure out which ones were sampled, should be 500 bc we sampled 500 
+sampled_k <- q9_elev_krig %>% 
+              filter(diff == 0 | diff == 0.00)
+
+# remove to correlate 
+q9_elev_nosample_k <- q9_elev_krig %>% 
+                      filter(diff != 0 | diff != 0.00)
+
+# correlate 
+(krig_corr <- cor(q9_elev_nosample_k$predicted_9, q9_elev_nosample_k$original))
+
+#create df to plot from
+krig_raster <- cbind(srtm_df, predicted_9)
+
+```
+
+The correlation between the best kriged model prediction and the known elevation is `r toString(krig_corr)`. 
+
+### c. Inverse distance weighting
+```{r, warning=F, message=FALSE}
+gridded(new.grid) <- ~x+y
+
+idw.gstat_9 <- idw(elevation ~ 1, gstat.veg_9, new.grid)
+
+#extract idw predictions 
+idw_pred_9 <- idw.gstat_9$var1.pred
+
+idw_pred_og_9 <- cbind(idw_pred_9, original)
+
+idw_pred_og_9 <- idw_pred_og_9 %>% 
+                    as.data.frame() %>% 
+                    mutate(diff = round(idw_pred_9 - original,2))
+
+# remove to correlate 
+q9_elev_nosample_idw <- idw_pred_og_9 %>% 
+                      filter(diff != 0 | diff != 0.00)
+
+# correlate 
+(idw_corr <- cor(q9_elev_nosample_idw$idw_pred_9, q9_elev_nosample_idw$original))
+
+#create df to plot from
+idw_raster <- cbind(srtm_df, idw_pred_9)
+
+```
+
+My kriging model does perform better than inverse distance weighting: the correlation between the best kriged model prediction and the known elevation is `r toString(krig_corr)` whereas idw is `r toString(idw_corr)`. 
+
+### d. Plots
+```{r, warning=F, message=FALSE, fig.show=F}
+# create color scale 
+# r color brewer spectral
+myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+
+#fill
+sf <- scale_fill_gradientn(colours = myPalette(100), limits = c(2450.91, 4145.64))
+
+#points 
+sp <- scale_colour_gradientn(colours = myPalette(100), limits = c(2450.91, 4145.64))
+
+# Plot of sample points 
+sample_points_plot <- ggplot(srtm_pts, aes(x, y, color = elevation))+
+  geom_point()+
+  labs(fill = "Elevation (m)",
+       title = "Sampling Points",
+       x = "Longitude (°)",
+       y = "Latitude (°)")+
+  sp
+
+# Plot of Kriging
+krig_plot <- ggplot(srtm_df, aes(x, y, fill = predicted_9))+
+  geom_tile()+
+  labs(fill = "Elevation (m)",
+       title = "Kriging",
+       x = "Longitude (°)",
+       y = "Latitude (°)")+
+  sf
+
+#Plot of IDW
+idw_plot <- ggplot(idw_raster, aes(x, y, fill = idw_pred_9))+
+  geom_tile()+
+  labs(fill = "Elevation (m)",
+       title = "Inverse Distance Weighting",
+       x = "Longitude (°)",
+       y = "Latitude (°)")+
+  sf
+
+
+# Plot of true elevation 
+true_elev_plot <- ggplot(srtm_df, aes(x, y, fill = srtm_15_05))+
+  geom_tile()+
+  labs(fill = "Elevation (m)",
+       title = "True Elevation",
+       x = "Longitude (°)",
+       y = "Latitude (°)")+
+  sf
+```
+
+```{r, warning=F, message=FALSE, fig.dim=c(12,12)}
+cowplot::plot_grid(sample_points_plot, krig_plot, idw_plot, true_elev_plot, nrow = 2, ncol = 2)
+```
+

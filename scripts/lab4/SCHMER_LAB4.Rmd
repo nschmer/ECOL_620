@@ -1,0 +1,367 @@
+---
+title: "ECOL 620 Lab 4"
+author: "Natalie Schmer"
+date: "2/11/2021"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, message = F}
+#load packages
+{
+  library(raster)            
+  library(rasterVis)         
+  library(landscapemetrics)  
+  library(rgdal)
+  library(tidyverse)
+  library(here)
+}
+
+# pull up all the possible metrics 
+possible_mets <- list_lsm()
+```
+
+# Fort Collins Raster
+## 1. Bar plot of land cover types 
+```{r, warning=F, message=FALSE, fig.dim=c(12,8)}
+nlcd <- raster(here("data/data_for_lab4/fort_collins.tif"))
+nlcd <- as.factor(nlcd)
+
+#add names of categories to raster layer
+land_cover <- levels(nlcd)[[1]]
+
+land_cover[,"landcover"] <- c("Open Water", "Developed, Open Space","Developed, Low Intensity",
+                              "Developed, Medium Intensity","Developed, High Intensity",
+                              "Barren Land","Deciduous Forest", "Evergreen Forest","Mixed Forest",
+                              "Shrub/Scrub","Grassland/Herbaceous","Pasture/Hay","Cultivated Crops",
+                              "Woody Wetlands","Emergent Herbaceous Wetlands")
+
+levels(nlcd) <- land_cover
+
+#plot
+# this is the color scheme, in order  
+land_col <- c("#4f6d9f", "#decece", "#d29b85", "#de3021", "#9d1f15",
+              "#b2afa5", "#7aa76d", "#336338", "#c0cb99","#cebb89", "#edecd0",
+              "#ddd75c", "#a67538", "#bfd7eb", "#7ba3be")
+
+#plot with rasterVis
+#levelplot(nlcd, col.regions=land_col, xlab="", ylab="")
+
+# Bar plot 
+# quantify % land cover of each type and join with IDs to have the cover types
+data_for_percent_land_FC <- lsm_c_pland(nlcd)
+
+colnames(data_for_percent_land_FC)[3] <- "ID"
+
+data_for_percent_land_FC <- merge(land_cover, data_for_percent_land_FC, by = "ID")
+
+data_for_percent_land_FC$color_codes <- land_col
+
+# Reorder according to order of nlcd and plot
+ data_for_percent_land_FC %>% 
+        mutate(landcover = fct_relevel(landcover, "Open Water", "Developed, Open Space","Developed, Low Intensity",
+                              "Developed, Medium Intensity","Developed, High Intensity",
+                              "Barren Land","Deciduous Forest", "Evergreen Forest","Mixed Forest",
+                              "Shrub/Scrub","Grassland/Herbaceous","Pasture/Hay","Cultivated Crops",
+                              "Woody Wetlands","Emergent Herbaceous Wetlands")) %>% ggplot()+
+  geom_bar(mapping = aes(x = landcover, y = value), fill = land_col, stat = "identity") +
+  theme_classic()+
+  labs(x= NULL,
+       y = "PercentLand Cover Type (%)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 12))
+```
+
+# Calculating metrics for open water 
+## 2. 
+
+```{r, warning=F, message=FALSE}
+#4-neighbor rule
+four_patch_rule <- lsm_c_np(nlcd, directions = 4)  
+
+# Pull out specific value for class 11 aka open water
+openwp4 <- four_patch_rule[four_patch_rule$class==11,]$value  
+
+#8-neighbor rule
+eight_patch_rule <- lsm_c_np(nlcd, directions = 8) 
+
+openwp8 <- eight_patch_rule[eight_patch_rule$class==11,]$value  
+```
+The number of open water patches in the greater Fort Collins region using the 4-neighborhood rule: `r toString(openwp4)` and the 8-neighborhood rule: `r toString(openwp8)`
+
+## 3.  
+
+```{r, warning=F, message=FALSE}
+
+patch_metrics_3 <- calculate_lsm(nlcd, 
+                                level = "patch", 
+                                metric = "area", 
+                                directions = 4, 
+                                full_name = T) 
+
+lg_owp_3 <- patch_metrics_3 %>% 
+              dplyr::filter(class == "11") 
+
+lg_owp_v <- max(lg_owp_3$value)
+
+```
+The largest open water patch size in hectare using the 4-neighborhood rule is `r toString(lg_owp_v)`.
+
+## 4.  
+```{r, warning=F, message=FALSE}
+# hectacres check 
+mean_owp_v <- mean(lg_owp_3$value)
+
+# in km^2
+mean_owp_v_km <- mean_owp_v*0.01
+
+```
+Mean open water patch size  using the 4-neighborhood rule is `r toString(mean_owp_v)` hectares or `r toString(mean_owp_v_km)` km^2.
+
+## 5.   
+```{r, warning=F, message=FALSE}
+
+patch_metrics_8 <- calculate_lsm(nlcd,
+                                 level = "patch", 
+                                 what = "lsm_p_core",
+                                 directions = 8, 
+                                 edge_depth = 3,
+                                 full_name=T)
+
+corea_owp_8 <- patch_metrics_8 %>% 
+              dplyr::filter(class == "11") 
+
+q5_range <- range(corea_owp_8$value)
+```
+The range of core area open water patches in hectares using the 8-neighborhood rule and
+edge depth of 3 is `r toString(q5_range)`.
+
+
+## 6. Correlations 
+
+Of the patch-based metrics (using the 4-neighborhood rule), which has the strongest
+negative correlation? Include the top-three pairings.
+
+I only included correlations that had the absolute value of the coefficient of < 90. The strongest negative correlation is between para (perimeter-area ratio) and circle (related circumscribing circle) (-0.825). From reading the package documentation, this seems to mean that  the less circular a shape is (low perimeter area ratio), the larger the circle is, meaning the patch is not very compact. 
+
+The top three pairings (using absolute values) were: 
+1. Frac (fractal dimension index, describes patch complexity) and circle (0.865) 
+2. Shape (shape index, ratio of actual vs hypothetical minimum patch perimeter) and gyrate (radius of gyration, the distance from each cell to the patch centroid) (0.846). 
+3. Shape and frac (0.837)
+```{r, warning=F, message=FALSE}
+# only taking correlations with absolute value of less than 90
+q6 <- calculate_lsm(nlcd, 
+                    level = "patch", 
+                    directions = 4,
+                    full_name=T)
+
+corr <- show_correlation(data = q6[,1:6], method = "pearson", label=T) 
+
+corr_data <- as.data.frame(corr$data)
+
+# remove the 1 becuase those don't count 
+corr_data_1 <- corr_data %>% 
+                mutate(abs_value = abs(value)) %>% 
+                filter(abs_value < 1)
+                
+```
+
+## 7. Plot showing the relationship between the number of open water patches using the 4-neighborhood rule and grain size of 30m, 60m, 120m, 240, and 600m.
+
+As the resolution decreases due to increased aggregation factors, there is less detail in the resulting raster (other than i = 1, or resolution staying 30) and the number of patches decreases. 
+
+```{r, warning=F, message=FALSE}
+#reload nlcd for 7 
+q7_nlcd <- raster(here("data/data_for_lab4/fort_collins.tif"))
+
+#Make dataframe to store loop components
+q7_data <- data.frame() %>% 
+            mutate(aggregate_factor = NA,
+                   patch_number = NA)
+z <- data.frame(NA)
+
+#Create the sequence, define steps and where to put data 
+
+for (i in as.numeric(c((30/30), (60/30), (120/30), (240/30), (600/30)))) {
+  
+  print(i)
+  
+  new_raster <- raster::aggregate(q7_nlcd, fact = i, fun = "modal")
+  
+  patch_metrics <- calculate_lsm(new_raster,
+                                 level = "class", 
+                                 what = "lsm_c_np",
+                                 directions = 4,  
+                                 full_name = T) 
+  
+  z$patch_number <- patch_metrics %>% 
+    dplyr::filter(class == "11") %>% 
+    select(value) %>% 
+    as.numeric()
+ 
+  z$aggregate_factor <- i
+  z$grain_size <- z$aggregate_factor*30
+  
+  q7_data <- rbind(z, q7_data)
+}
+
+q7_data %>% 
+              select(-NA.) %>% 
+  ggplot(., aes(grain_size, patch_number))+
+  geom_point()+
+  geom_line()+
+  ggthemes::theme_clean()+
+  labs(x = "Grain Size",
+       y = "Number of Open Water Patches")
+
+```
+
+# Reclassification 
+```{r, warning=F, message=FALSE}
+#land-cover type (nlcd original categories)
+#1 = forest:41-43
+#2 = developed:21-24
+#3 = agriculture:81,82
+#4 = herbaceous:71-74
+#5 = open:31, 51-52
+#6 = wetland:90,95
+#7 = water:11-12
+
+# set up reclassifications 
+nlcd <- raster(here("data/data_for_lab4/fort_collins.tif"))
+
+nlcd <- as.factor(nlcd)
+
+reclass_raster <- nlcd
+reclass_ids <- as.data.frame(reclass_raster@data@attributes)
+
+values(reclass_raster) <- 0 
+
+# change the covers 
+reclass_ids <- reclass_ids %>% 
+                  mutate(reclass_land = case_when(ID %in% c(41:43) ~ "forest",
+                                                  ID %in% c(21:24) ~ "developed",
+                                                  ID %in% c(81:82) ~ "agriculture",
+                                                  ID %in% c(71:74) ~ "herbaceous",
+                                                  ID %in% c(31, 51:52) ~ "open",
+                                                  ID %in% c(90, 95) ~ "wetland",
+                                                  ID %in% c(11:12) ~ "water")) %>% 
+                  mutate(reclass_id = case_when(reclass_land == "forest" ~ 1,
+          reclass_land == "developed" ~ 2,
+          reclass_land == "agriculture" ~ 3,
+          reclass_land == "herbaceous" ~ 4,
+          reclass_land == "open" ~ 5,
+          reclass_land == "wetland" ~ 6,
+          reclass_land == "water" ~ 7)) %>% 
+  mutate(reclass_id = as.numeric(reclass_id)) %>% 
+                  dplyr::select(ID, reclass = reclass_id)
+
+# make a matrix 
+reclass_matrix <- as.matrix(reclass_ids)
+
+# new levels df
+nlcd.levels <- levels(nlcd)[[1]]
+
+# join IDs and new IDs
+reclass.mat <- cbind(levels(nlcd)[[1]], reclass_matrix)
+
+# Check 
+reclass.mat
+
+# Make it into a matrix 
+reclass.mat <- as.matrix(reclass.mat)
+
+#only want the original ID and the new ID
+reclass.mat <- reclass.mat[,c(1, 3)]
+reclass.mat
+
+#check class
+class(reclass.mat[,2])
+
+#reclass.mat[,3] <- as.integer(reclass.mat[,3])
+#reclass.mat[,1] <- as.integer(reclass.mat[,1])
+
+# Reclassify
+reclass_raster <- reclassify(nlcd, reclass.mat)
+
+# Plot to check 
+plot(reclass_raster)
+
+# Looks ok, open water makes sense and has a large developed patch that seems to match the city 
+```
+
+## 8. 
+
+```{r, warning=F, message=FALSE}
+q8_4 <- lsm_c_np(reclass_raster, directions = 4) 
+
+value_4 <- q8_4 %>% 
+                filter(class == 3) %>% 
+                select(value)
+
+q8_8 <- lsm_c_np(reclass_raster, directions = 8)
+
+value_8 <- q8_8 %>% 
+                filter(class == 3) %>% 
+                select(value)
+```
+The 4-neighborhood rule gives `r toString(value_4)` agriculture patches and the 8-neighborhood rule gives `r toString(value_8)` agriculture patches. 
+
+## 9.  
+
+```{r, warning=F, message=FALSE}
+q9_4 <- calculate_lsm(reclass_raster, 
+                      level = "patch",
+                      metric = "enn", 
+                      directions = 4, 
+                      full_name=T) 
+
+value_4_9 <- q9_4 %>% 
+                dplyr::filter(class == 3) 
+                
+mean_q9 <- mean(value_4_9$value, na.rm = T)
+```
+The mean euclidean nearest neighbor distance using the 4 neighborhood rule for agriculture patches is `r toString(mean_q9)` m.
+
+## 10. Plot of developed and open water landcover with number of core areas. 
+
+```{r, warning=F, message=FALSE}
+# p = patches, ncore = number of cores
+show_lsm(reclass_raster, 
+         what ="lsm_p_ncore",
+         class = c(2, 7),
+         directions = 4,
+         edge_depth = 3)
+
+```
+
+# Calculating other metrics for reclassified fort Collins
+
+## 11. Land-cover richness describes the number of different types of land cover. In the case of the reclassified rather, there are 7 different types.
+
+```{r}
+richness <- length(unique(values(reclass_raster)))
+richness
+```
+
+## 12. Shannon diversity is a metric that takes into account number/richness and evennes of land cover types. A higher diverity index indicates less fragmentation or fewer edges and patches, but is also better interpreted when comapring to values for other landscapes. 
+```{r}
+table(values(reclass_raster))
+
+C <- table(values(reclass_raster))
+P <- C / sum(C)
+D <- -sum(P * log(P))
+```
+Shannon diversity index here is `r toString(D)`.
+
+## 13. Shannon evennessdescribes distribution of relative areas among land- cover types. A higher eveness value means greater landscape diversity.  
+```{r}
+E <- D/log(length(C))
+```
+Shannon evenness here is `r toString(E)`
+
+## 14. Contagion is one of the aggregation metrics and is based on cell adjacencies and describes the probability of 2 random cells belonging to the same class. The contagion for the reclassified raster is 45.3, with higher values up to 100 meaning all cells are equally adjacent to all the other classes and lower values down to 0 meaning all cells are unevenly distributed.  
+```{r}
+lsm_l_contag(reclass_raster)
+```
+

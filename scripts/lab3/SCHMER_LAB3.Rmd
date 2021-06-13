@@ -1,0 +1,257 @@
+---
+title: "ECOL 620 Lab 3"
+author: "Natalie Schmer"
+date: "2/4/2021"
+output:
+  word_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, message = F}
+{
+  library(spatstat)          
+  library(raster)            
+  library(tidyverse)
+  library(viridis)
+  library(here)
+}
+```
+
+# 1. 
+- The K- function is used to analyze point patterns. The function calculates the degree of spatial aggregation of points within a circle with the radius r, and contrasts the observed pattern to the pattern expected under CSR. The K function uses E (number of points withing radius r of a point) and lambda (n/Area). IN the K-function, as the radius increases, we would expect points within the radius to increase exponentially.
+- The L- function is dependent on the K function, but is different in that it is the linearized K function, and makes the expected values under CSR equal to the radius r. The L-function is useful as another way to visualize the data by creating a 1:1 line of L(r) as a function of r, representing the expected value with CSR. Anything >0 or above the 1:1 line represents aggregation, or clustering, 0 or on the line is CSR, and <0 or below the 1:1 line represents regularity. 
+
+# 2.
+The scale of the L-function is smaller than the K-function because we are not only dividing K(r) by pi but also taking the square root and potentially subtracting r. When interpreting L-function values in an ecology context, anything >0 represents aggregation/clustering, 0 is CSR, and <0 or represents regular arrangement. 
+
+# 3. 
+Edge effect corrections are necessary because edges/ the boundary of the area of interest introduces uncertainty in that there is just no information on any points outside of the boundary. This can be an issue because the number of observed points is likely lower than the true number of points, if points could occur outside of study area when using a point near the boundary as the center for a radius -- the radius of edge points include area that's beyond the extent. 
+
+# 4. Heat map 
+The smoothing parameter that created the heatmap below and best matched Figure 4.4d was 2.2. The data does not seem to be randomly distributed, there looks to be a few spots that have clusters of cacti. 
+```{r, warning=F, message=FALSE, }
+#import the data from directory
+cactus <- read.csv(here("data/data_for_lab3/cactus.csv"))
+
+boundary <- read.csv(here("data/data_for_lab3/cactus_boundaries.csv"),header=T)
+
+#create spatstat objects
+#create spatstat objects
+ppp.window <- owin(xrange=c(boundary$Xmin, boundary$Xmax),
+                 yrange=c(boundary$Ymin, boundary$Ymax))
+ppp.cactus <- ppp(cactus$East, cactus$North, window=ppp.window)
+
+#heat map
+# smoothing param sets here, play around w number changed from 10 
+den_cat <- as.data.frame(density(ppp.cactus, 2.2))
+
+ggplot() +
+  geom_tile(data=den_cat, aes(x=x, y=y, fill = value)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0))+ 
+  scale_fill_viridis(option = "plasma")+
+  coord_fixed(ratio = 1)+
+  theme_bw()+
+  labs(x = "Easting (m)", 
+       y = "Northing (m)", 
+       fill="Opuntia humifusa\ndensity \n(cactus/m^2)")+
+  theme(legend.title.align=0.5) +
+  theme(text = element_text(size=13),
+        axis.text.x =  element_text(angle = 90, vjust = 0.5))
+```
+
+# 5. Quadrat test
+The quadrat test says that there may be a non-random point pattern at this scale. The main shortcoming of this approach is that it is difficult to determine the exact pattern without a plot to show deviations or clumping.
+```{r, warning=F, message=FALSE}
+(quadrat.test(ppp.cactus, nx = 4, ny = 4, method="Chisq"))
+```
+
+# 6. Comparing no correction vs isotropic correction
+The greatest observed difference between the corrected and uncorrected L functions starts when r is somewhere around 4 or 5. This shows that when r is around 4 or 5 and greater, the boundary corrections help to not count fewer points within the radius of the boundary.
+```{r, warning=F, message=FALSE, fig.show = "hide"}
+#Ripley's L-function:
+#L, no correction
+Lnone <- Lest(ppp.cactus, correction="none")
+
+#L, isotropic edge correction 
+Liso <- Lest(ppp.cactus, correction="isotropic")
+
+# Plots 
+lnone_plot <- ggplot()+
+  geom_line(data=Lnone, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data=Lnone, aes(x=r, y=un-r), colour="black")+
+  labs(x="r", y="L(r)-r", title = "L (no correction)")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+
+
+liso_plot <- ggplot()+
+  geom_line(data=Liso, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data=Liso, aes(x=r, y=iso-r), colour="black")+
+  labs(x="r", y="L(r)-r", title = "L (isotropic correction)")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+```
+
+```{r, warning=F, message=FALSE, fig.dim = c(10,7)}
+(egg::ggarrange(lnone_plot, liso_plot, nrow = 2))
+```
+
+```{r, warning=F, message=FALSE, fig.show="hide", echo=FALSE, include=FALSE}
+#ribbon for liso with alpha = 0.05 
+Lcsr <- envelope(ppp.cactus, Lest, nsim=95, rank=1, correction="isotropic", global=F)
+
+(liso_plot_ribbon <- ggplot()+
+  geom_ribbon(Lcsr, mapping = aes(x = r, ymin = lo-theo, ymax = hi-theo), fill = "gray70") +
+    geom_line(data=Lcsr, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data=Lcsr, aes(x=r, y=obs-r), colour="black")+
+  #geom_area(Lcsr, aes(y = lo-hi))
+  labs(x="r", y="L(r)-r", title = "Liso")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+)
+```
+
+
+# 7. Ribbon for cactus data
+The following code was run to generate the ribbon: `Lcsr <- envelope(ppp.cactus, Lest, nsim=95, rank=1, correction="isotropic", global=F)` The "observed" starts moving out of the expected range around r = 3, which is where we reject the null hypothesis, in the positive direction outside of the CI. This means that the data is clumped.  
+
+# 8. Ponderosa 
+Panel A is tree locations and panel B is the L-function with the envelope. I would characterize the tree distribution as pretty close to CSR because the observed line is both below and above 0 for showing regularity and clumping, but does not actually move much outside of the envelope. 
+```{r, warning=F, message=FALSE, fig.show = "hide"}
+ponderosa <- spatstat.data::ponderosa
+
+#ribbon for liso with alpha = 0.01 
+Lcsr_ponderosa <- envelope(ponderosa, Lest, nsim=99, rank=1, correction="isotropic", global = F)
+
+ponderosa_df <- as.data.frame(ponderosa)
+
+# plots 
+# scatter 
+(ponderosa_scatter <- ggplot(ponderosa_df, aes(x, y))+
+  geom_point(col = "darkgreen", size = 2.5)+
+    labs(x = "Easting (m)",
+         y = "Northing (m)")+
+    theme_bw()+
+  theme(text = element_text(size=15))
+    )
+
+#ribbon 
+# need the -r bc we do the -r around the theoretical line so everything scales the right way 
+(liso_plot_ribbon_ponderosa <- ggplot()+
+  geom_ribbon(Lcsr_ponderosa, mapping = aes(x = r, ymin = lo-r, ymax = hi-r), fill = "gray70") +
+    geom_line(data=Lcsr_ponderosa, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data=Lcsr_ponderosa, aes(x=r, y=obs-r), colour="black") +
+  labs(x="r", y="L(r)-r")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+)
+
+```
+
+```{r, fig.dim = c(12,6), message = F}
+cowplot::plot_grid(ponderosa_scatter, liso_plot_ribbon_ponderosa, labels = "AUTO")
+```
+
+# 9. Simulated data: 
+Out of the distributions, the Poisson distribution best shows CSR because the observed data stays within the envelope and very close to the theoretical line at 0, and the scsle is alredy very small with the envelope range ~ -0.01 - 0.01. The uniform distribution also shows some CSR, but only at r > 0.11 or so, any smaller r shows regularity. The clustered distribution shows almost no CSR, with the majority of the data showing clustering. 
+```{r, warning=F, message=FALSE, fig.show="hide"}
+
+set.seed(42)
+#poisson distribution
+pois_dis <- rpoispp(100)
+
+(pois_9 <- ggplot()+
+  geom_point(data=as.data.frame(pois_dis), aes(x=x, y=y), colour="darkgreen")+
+  labs(y = "northing (no units)", x = "easting (no units)")+
+  theme_bw()+
+  theme(text = element_text(size=15))+
+  coord_equal()+
+  ggtitle("Poisson Distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+)
+
+# poisson envelope 
+
+#ribbon for liso with alpha = 0.01 
+Lcsr_poisson<- envelope(pois_dis, Lest, nsim=99, rank=1, correction="isotropic", global = F)
+
+#ribbon 
+(liso_plot_ribbon_poisson <- ggplot()+
+  geom_ribbon(Lcsr_poisson, mapping = aes(x = r, ymin = lo-r, ymax = hi-r), fill = "gray70") +
+    geom_line(data=Lcsr_poisson, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data=Lcsr_poisson, aes(x=r, y=obs-r), colour="black") +
+  labs(x="r", y="L(r)-r")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+)
+
+(poisson_plots <- egg::ggarrange(pois_9, liso_plot_ribbon_poisson, ncol = 1))
+
+
+set.seed(1)
+
+#regular distribution
+regu_dis <- rSSI(0.09, 70)
+
+(uni_9 <- ggplot()+
+  geom_point(data=as.data.frame(regu_dis), aes(x=x, y=y), colour="darkgreen")+
+  labs(y = "northing (no units)", x = "easting (no units)")+
+  theme_bw()+
+  theme(text = element_text(size=15))+
+  coord_equal()+
+  ggtitle("Uniform Distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+)
+
+#ribbon for liso with alpha = 0.01 
+Lcsr_uniform <- envelope(regu_dis, Lest, nsim=99, rank=1, correction="isotropic", global = F)
+
+
+#ribbon 
+(liso_plot_ribbon_uniform <- ggplot()+
+  geom_ribbon(Lcsr_uniform, mapping = aes(x = r, ymin = lo-r, ymax = hi-r), fill = "gray70") +
+    geom_line(data = Lcsr_uniform, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data = Lcsr_uniform, aes(x=r, y=obs-r), colour="black") +
+  labs(x="r", y="L(r)-r")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+)
+
+(regular_plots <- egg::ggarrange(uni_9, liso_plot_ribbon_uniform))
+
+
+set.seed(21)
+#clustered distribution
+clust_dist <- rMatClust(30, 0.05, 4)
+
+(clust_9 <- ggplot()+
+  geom_point(data=as.data.frame(clust_dist), aes(x=x, y=y), colour="darkgreen")+
+  labs(y = "northing (no units)", x = "easting (no units)")+
+  theme_bw()+
+  theme(text = element_text(size=15))+
+  coord_equal()+
+  ggtitle("Clustered Distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+)
+
+#ribbon for liso with alpha = 0.01 
+Lcsr_clust <- envelope(clust_dist, Lest, nsim=99, rank=1, correction="isotropic", global = F)
+
+#ribbon 
+(liso_plot_ribbon_clustered <- ggplot()+
+  geom_ribbon(Lcsr_clust, mapping = aes(x = r, ymin = lo-r, ymax = hi-r), fill = "gray70") +
+    geom_line(data = Lcsr_clust, aes(x=r, y=theo-r), colour="red")+
+  geom_line(data = Lcsr_clust, aes(x=r, y=obs-r), colour="black") +
+  labs(x="r", y="L(r)-r")+
+  theme_classic()+
+  theme(text = element_text(size=15))
+)
+
+(clust_plots <- egg::ggarrange(clust_9, liso_plot_ribbon_clustered, ncol = 1))
+```
+
+```{r, fig.dim = c(12,7), message = F}
+(all_q9 <- cowplot::plot_grid(poisson_plots, regular_plots, clust_plots, nrow = 1))
+```
